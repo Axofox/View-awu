@@ -22,6 +22,16 @@ exports.handler = async (event) => {
   try {
     const res = await fetch(upstream, { headers: { Accept: "application/json" } });
     const body = await res.text();
+    if (!res.ok) {
+      // Surface upstream details so we can tell a site block from a bad route.
+      return json(res.status, {
+        error: "Upstream rejected request",
+        upstreamStatus: res.status,
+        server: res.headers.get("server"),
+        cfMitigated: res.headers.get("cf-mitigated"),
+        snippet: body.slice(0, 300),
+      });
+    }
     return {
       statusCode: res.status,
       headers: {
