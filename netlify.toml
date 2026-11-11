@@ -5,5 +5,5 @@
 # Pretty URL: /api/members and /api/players/123 -> the proxy function
 [[redirects]]
   from = "/api/*"
-  to = "/.netlify/functions/proxy?path=:splat"
+  to = "/.netlify/functions/proxy/:splat"
   status = 200

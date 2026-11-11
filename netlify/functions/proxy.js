@@ -4,7 +4,11 @@ const BASE = "https://mightpulse.com/api";
 const ALLIANCE_ID = "221500002";
 
 exports.handler = async (event) => {
-  const path = (event.queryStringParameters && event.queryStringParameters.path) || "";
+  // Works whether Netlify passes the original (/api/members) or rewritten
+  // (/.netlify/functions/proxy/members) path, or a ?path= query param.
+  const m = String(event.path || "").match(/(members|players\/[^/]+)\/?$/);
+  const path =
+    (m && m[1]) || (event.queryStringParameters && event.queryStringParameters.path) || "";
   let upstream;
 
   if (path === "members") {
