@@ -50,7 +50,7 @@ const COLS = [
   {k:"power",  label:"Power", num:true},
   {k:"tc",     label:"TC",    num:true},
   {k:"vip",    label:"VIP",   num:true},
-  {k:"active", label:"Last active", num:true},
+  {k:"kills",  label:"Kills",  num:true},
   {k:"coords", label:"Coords"},
 ];
 // MightPulse field names are not verified, so try several likely keys.
@@ -59,12 +59,12 @@ function normalize(m){
   const x = m.x ?? m.coord_x, y = m.y ?? m.coord_y;
   return {
     uid: pick(m, ["uid","id","player_id","playerId"]),
-    name: pick(m, ["name","nickname","player_name","playerName"]) ?? "?",
-    rank: Number(String(pick(m, ["rank","alliance_rank","allianceRank","role"]) ?? "").replace(/\D/g,"")) || null,
+    name: pick(m, ["nick_name","name","nickname","player_name","playerName"]) ?? "?",
+    rank: Number(String(pick(m, ["alliance_rank_label","alliance_rank","rank_label","rank","role"]) ?? "").replace(/\D/g,"")) || null,
     power: Number(pick(m, ["power","total_power","totalPower"])) || 0,
-    tc: Number(pick(m, ["tc_level","tcLevel","tc","town_center","furnace_level","level"])) || null,
+    tc: Number(pick(m, ["town_center_level","tc_level","tcLevel","tc","level"])) || null,
     vip: Number(pick(m, ["vip","vip_level","vipLevel"])) || null,
-    active: pick(m, ["last_active","lastActive","last_seen","lastSeen"]),
+    kills: Number(m.kills) || null,
     coords: m.coords ?? m.coordinates ?? (x != null && y != null ? `${x}, ${y}` : null),
   };
 }
@@ -86,7 +86,7 @@ function renderHead(){
     return `<th data-k="${c.k}" aria-sort="${s}">${c.label}${s==="none"?"":s==="ascending"?" ▲":" ▼"}</th>`;
   }).join("");
 }
-function val(r,k){ return k==="active" ? parseActive(r.active) : r[k]; }
+function val(r,k){ return r[k]; }
 function render(){
   const q = $("q").value.trim().toLowerCase();
   const list = rows.filter(r => r.name.toLowerCase().includes(q)).sort((a,b) => {
@@ -101,7 +101,7 @@ function render(){
     <td class="num">${fmt(r.power)}</td>
     <td class="num">${r.tc??"-"}</td>
     <td class="num">${r.vip??"-"}</td>
-    <td>${ago(parseActive(r.active))}</td>
+    <td class="num">${fmt(r.kills)}</td>
     <td>${esc(r.coords??"-")}</td></tr>`).join("")
     : `<tr><td class="msg">No members match.</td></tr>`;
   renderHead();

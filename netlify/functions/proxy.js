@@ -1,43 +1,43 @@
-// Server-side proxy for MightPulse (avoids browser CORS).
-// Only two upstream routes are allowed, nothing else can be reached through it.
-const BASE = "https://mightpulse.com/api";
-const ALLIANCE_ID = "221500002";
+// Server-side proxy for the official MightPulse API (https://api.mightpulse.com).
+// The API key lives in the Netlify env var MIGHTPULSE_API_KEY and never reaches the browser.
+const BASE = "https://api.mightpulse.com/v1";
+const KID = "2206"; // kingdom
+const TAG = "AWU"; // alliance tag (case-sensitive)
 
 exports.handler = async (event) => {
-  // Works whether Netlify passes the original (/api/members) or rewritten
-  // (/.netlify/functions/proxy/members) path, or a ?path= query param.
-  const m = String(event.path || "").match(/(members|players\/[^/]+)\/?$/);
-  const path =
-    (m && m[1]) || (event.queryStringParameters && event.queryStringParameters.path) || "";
-  let upstream;
+  const key = process.env.MIGHTPULSE_API_KEY;
+  if (!key) return json(500, { error: "MIGHTPULSE_API_KEY is not set in Netlify environment variables" });
 
+  // Works whether Netlify passes the original or rewritten path, or a ?path= param.
+  const m = String(event.path || "").match(/(members|players\/[^/]+)\/?$/);
+  const path = (m && m[1]) || (event.queryStringParameters && event.queryStringParameters.path) || "";
+
+  let upstream;
   if (path === "members") {
-    upstream = `${BASE}/alliances/${ALLIANCE_ID}/members`;
-  } else if (/^players\/[A-Za-z0-9_-]{1,40}$/.test(path)) {
-    upstream = `${BASE}/${path}`;
+    // One request returns the whole alliance.
+    upstream = `${BASE}/alliances/${KID}/${TAG}?include=info,members_base`;
+  } else if (/^players\/[0-9]{1,20}$/.test(path)) {
+    upstream = `${BASE}/${path}?include=base`;
   } else {
     return json(400, { error: "Unknown route" });
   }
 
   try {
-    const res = await fetch(upstream, { headers: { Accept: "application/json" } });
+    const res = await fetch(upstream, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${key}` },
+    });
     const body = await res.text();
     if (!res.ok) {
-      // Surface upstream details so we can tell a site block from a bad route.
       return json(res.status, {
         error: "Upstream rejected request",
         upstreamStatus: res.status,
-        server: res.headers.get("server"),
-        cfMitigated: res.headers.get("cf-mitigated"),
+        retryAfter: res.headers.get("retry-after"),
         snippet: body.slice(0, 300),
       });
     }
     return {
-      statusCode: res.status,
-      headers: {
-        "Content-Type": res.headers.get("content-type") || "application/json",
-        "Cache-Control": "public, max-age=60",
-      },
+      statusCode: 200,
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=60" },
       body,
     };
   } catch (err) {

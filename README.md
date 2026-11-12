@@ -4,7 +4,7 @@ Kingshot alliance tracker (Kingdom 2206). Static page plus one Netlify function
 that proxies MightPulse server-side to avoid CORS.
 
 - `index.html`: sortable member table (power, TC, VIP, last active, R1-R5, coords)
-- `netlify/functions/proxy.js`: allows only `/alliances/221500002/members` and `/players/{uid}`
+- `netlify/functions/proxy.js`: calls the official MightPulse API (`api.mightpulse.com/v1`) with `MIGHTPULSE_API_KEY` (Netlify env var)
 - `netlify.toml`: routes `/api/members` and `/api/players/{uid}` to the function
 
 Deploy: connect this repo in Netlify (no build command, publish dir `.`).
