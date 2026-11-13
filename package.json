@@ -1,0 +1,8 @@
+{
+  "name": "view-awu",
+  "private": true,
+  "dependencies": {
+    "@netlify/database": "latest",
+    "@netlify/functions": "latest"
+  }
+}

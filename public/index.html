@@ -33,6 +33,8 @@
   .detail h2{margin:0 0 6px;font-size:13px;color:var(--accent);font-weight:600}
   .detail ul{margin:4px 0 10px;padding-left:18px} .detail li{margin:2px 0}
   .detail p{margin:0} .hero{margin-bottom:6px}
+  td.up{color:var(--accent)} td.down{color:#f87171}
+  .detail section h2:not(:first-child){margin-top:14px}
   .q{color:var(--muted);font-size:13px} .q.red{color:#f87171}
   .hint{color:var(--muted);font-size:13px;margin:8px 2px}
   .msg{padding:24px;color:var(--muted)} .err{color:#f87171}
@@ -49,7 +51,7 @@
     <span class="count" id="count"></span>
     <button id="refresh">Refresh</button>
   </div>
-  <p class="hint">Select a name to see that member's gear and heroes.</p>
+  <p class="hint" id="hint">Select a name to see that member's hero gear and power history.</p>
   <div class="wrap"><table>
     <thead><tr id="head"></tr></thead>
     <tbody id="body"><tr><td class="msg">Loading members…</td></tr></tbody>
@@ -63,7 +65,8 @@ const COLS = [
   {k:"tc",     label:"TC",    num:true},
   {k:"vip",    label:"VIP",   num:true},
   {k:"kills",  label:"Kills",  num:true},
-  {k:"gear",   label:"Gov gear", num:true},
+  {k:"growth", label:"Growth", num:true},
+  {k:"gear",   label:"Hero gear", num:true},
   {k:"coords", label:"Coords"},
 ];
 // MightPulse field names are not verified, so try several likely keys.
@@ -79,6 +82,7 @@ function normalize(m){
     vip: Number(pick(m, ["vip","vip_level","vipLevel"])) || null,
     kills: Number(m.kills) || null,
     gov: null, heroes: [], gear: null, // filled in by loadGear()
+    growth: null, points: [],          // filled in by loadHistory()
     coords: m.coords ?? m.coordinates ?? (x != null && y != null ? `${x}, ${y}` : null),
   };
 }
@@ -123,7 +127,8 @@ function render(){
     <td class="num">${tcLabel(r.tc)}</td>
     <td class="num">${r.vip??"-"}</td>
     <td class="num">${fmt(r.kills)}</td>
-    <td class="num">${r.gear?fmt(r.gear):!r.gov?(gearState==="loading"?"…":"-"):r.gov.hidden?"Hidden":"-"}</td>
+    <td class="num${r.growth>0?" up":r.growth<0?" down":""}">${r.growth==null?"-":signed(r.growth)}</td>
+    <td class="num">${r.gear!=null?"+"+r.gear:!r.gov&&gearState==="loading"?"…":"-"}</td>
     <td>${esc(r.coords??"-")}</td></tr>${open.has(r.uid)?detail(r):""}`).join("")
     : `<tr><td class="msg">No members match.</td></tr>`;
   renderHead();
@@ -138,12 +143,40 @@ function detail(r){
     ? r.heroes.map(h => `<div class="hero"><b>${esc(h.name)}</b> <span class="q">Lv ${h.level??"-"}${h.stars?` · ${esc(h.stars)}`:""}${h.exclusive?` · ${esc(h.exclusive.name)} Lv ${h.exclusive.level}`:""}</span>
         ${h.gear.length?`<ul>${h.gear.map(g => `<li><b>${esc(g.slot)}</b> ${esc(g.name)} <span class="q${g.red?" red":""}">${esc(g.quality??"")} +${g.level??0}${g.refine?` · mastery ${g.refine}`:""}</span></li>`).join("")}</ul>`:""}</div>`).join("")
     : `<p class="q">No arena heroes on record.</p>`;
+  const hist = r.points.length
+    ? `<ul>${r.points.slice(-8).reverse().map((p,i,a) => { const prev=a[i+1]; return `<li><b>${esc(p[0])}</b> ${fmt(p[1])}${prev?` <span class="q">${signed(p[1]-prev[1])}</span>`:""}</li>`; }).join("")}</ul>`
+    : `<p class="q">No power history yet. It's recorded once a day from now on.</p>`;
   return `<tr class="detail"><td colspan="${COLS.length}"><div class="cols">
-    <section><h2>Governor gear</h2>${gov}</section>
-    <section><h2>Arena heroes and gear</h2>${heroes}</section></div></td></tr>`;
+    <section><h2>Hero gear (arena team)</h2>${heroes}</section>
+    <section><h2>Power history</h2>${hist}<h2>Governor gear</h2>${gov}</section></div></td></tr>`;
 }
 const open = new Set();
 let gearState = "idle";
+const signed = n => (n>0?"+":n<0?"−":"") + Math.abs(n).toLocaleString();
+// Power history from the database: growth = latest power minus the oldest
+// snapshot within the last 7 days.
+async function loadHistory(){
+  try{
+    const res = await fetch("/api/history");
+    if(!res.ok) return;
+    const byId = new Map(rows.map(r => [r.uid, r]));
+    const cutoff = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+    let since = null;
+    for (const m of (await res.json()).members || []) {
+      const r = byId.get(String(m.governor_id)); if(!r) continue;
+      r.points = m.points.map(p => [p[0], Number(p[1])]);
+      const base = r.points.find(p => p[0] >= cutoff);
+      if (base && base[0] < new Date().toISOString().slice(0,10)) {
+        r.growth = (r.power || r.points[r.points.length-1][1]) - base[1];
+        if (!since || base[0] < since) since = base[0];
+      }
+    }
+    $("hint").textContent = "Select a name to see that member's hero gear and power history. "
+      + (since ? `Growth is power gained since ${since} (7 days at most).`
+               : "Growth appears after the second daily snapshot.");
+    render();
+  }catch(e){ /* table stays usable without history */ }
+}
 // Second step: VIP, coordinates, governor gear and heroes, 50 members per request.
 async function loadGear(){
   gearState = "loading"; render();
@@ -159,7 +192,9 @@ async function loadGear(){
         r.vip = p.vip ?? null;
         r.coords = p.x!=null && p.y!=null ? `${p.x}, ${p.y}` : null;
         r.gov = p.gov_gear; r.heroes = p.heroes || [];
-        r.gear = p.gov_gear.items.length ? p.gov_gear.items.reduce((t,i)=>t+(i.score||0),0) : null;
+        // Hero gear column: average upgrade level across the arena team's gear pieces.
+        const pieces = r.heroes.flatMap(h => h.gear);
+        r.gear = pieces.length ? Math.round(pieces.reduce((t,g)=>t+(g.level||0),0)/pieces.length) : null;
       }
     }catch(e){ /* table stays usable without gear */ }
     render();
@@ -179,7 +214,7 @@ async function load(){
     const a = data.alliance;
     if (a) $("sub").textContent = `Kingshot · Kingdom 2206 · ${fmt(a.power)} power · kingdom rank #${a.power_rank}`
       + (data.cached_at ? ` · updated ${ago(parseActive(data.cached_at))}` : "");
-    loadGear();
+    loadGear(); loadHistory();
     render();
   }catch(e){
     $("body").innerHTML = `<tr><td class="msg err">Couldn't load members (${esc(e.message)}). Try Refresh.</td></tr>`;

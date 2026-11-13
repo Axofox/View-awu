@@ -1,9 +1,14 @@
 [build]
-  publish = "."
+  publish = "public"
   functions = "netlify/functions"
 
-# Pretty URL: /api/members and /api/players/123 -> the proxy function
+# /api/history is served by its own function (see netlify/functions/history.mts).
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/proxy/:splat"
+  from = "/api/members"
+  to = "/.netlify/functions/proxy/members"
+  status = 200
+
+[[redirects]]
+  from = "/api/gear"
+  to = "/.netlify/functions/proxy/gear"
   status = 200
