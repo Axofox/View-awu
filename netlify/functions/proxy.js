@@ -12,38 +12,78 @@ exports.handler = async (event) => {
   const m = String(event.path || "").match(/(members|players\/[^/]+)\/?$/);
   const path = (m && m[1]) || (event.queryStringParameters && event.queryStringParameters.path) || "";
 
-  let upstream;
-  if (path === "members") {
-    // One request returns the whole alliance.
-    upstream = `${BASE}/alliances/${KID}/${TAG}?include=info,members_base`;
-  } else if (/^players\/[0-9]{1,20}$/.test(path)) {
-    upstream = `${BASE}/${path}?include=base`;
-  } else {
-    return json(400, { error: "Unknown route" });
-  }
+  const headers = { Accept: "application/json", Authorization: `Bearer ${key}` };
 
   try {
-    const res = await fetch(upstream, {
-      headers: { Accept: "application/json", Authorization: `Bearer ${key}` },
-    });
-    const body = await res.text();
-    if (!res.ok) {
-      return json(res.status, {
-        error: "Upstream rejected request",
-        upstreamStatus: res.status,
-        retryAfter: res.headers.get("retry-after"),
-        snippet: body.slice(0, 300),
-      });
-    }
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=60" },
-      body,
-    };
+    if (path === "members") return await members(headers);
+    if (/^players\/[0-9]{1,20}$/.test(path)) return await pass(`${BASE}/${path}?include=base`, headers);
+    return json(400, { error: "Unknown route" });
   } catch (err) {
     return json(502, { error: "Upstream fetch failed", detail: String(err) });
   }
 };
+
+// Whole alliance in one call, then VIP and coordinates from batched player
+// lookups (50 ids per call), merged onto each member.
+async function members(headers) {
+  const res = await fetch(`${BASE}/alliances/${KID}/${TAG}?include=info,members_base`, { headers });
+  if (!res.ok) return upstreamError(res);
+  const data = await res.json();
+  const list = data.members || [];
+
+  const ids = list.map((m) => m.governor_id).filter(Boolean);
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 50) chunks.push(ids.slice(i, i + 50));
+  const extra = new Map();
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const r = await fetch(`${BASE}/players?ids=${chunk.join(",")}&include=base`, { headers });
+        if (!r.ok) return;
+        for (const p of (await r.json()).players || []) {
+          if (p.player) extra.set(p.governor_id, p.player);
+        }
+      } catch (_) {
+        // Table still works without VIP and coordinates.
+      }
+    })
+  );
+  for (const m of list) {
+    const p = extra.get(m.governor_id);
+    if (p) Object.assign(m, { vip: p.vip, x: p.x, y: p.y });
+  }
+
+  return {
+    statusCode: 200,
+    // 5 minutes: upstream data is refreshed hourly at most, and this saves API quota.
+    headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=300" },
+    body: JSON.stringify({
+      alliance: data.alliance,
+      cached_at: data.cached_at,
+      fresh: data.fresh,
+      members: list,
+    }),
+  };
+}
+
+async function pass(url, headers) {
+  const res = await fetch(url, { headers });
+  if (!res.ok) return upstreamError(res);
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=300" },
+    body: await res.text(),
+  };
+}
+
+async function upstreamError(res) {
+  return json(res.status, {
+    error: "Upstream rejected request",
+    upstreamStatus: res.status,
+    retryAfter: res.headers.get("retry-after"),
+    snippet: (await res.text()).slice(0, 300),
+  });
+}
 
 function json(statusCode, obj) {
   return { statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };

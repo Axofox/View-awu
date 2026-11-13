@@ -31,7 +31,7 @@
 <body>
 <main>
   <h1>BlackBulls <span>[AWU]</span></h1>
-  <p class="sub">Kingshot · Kingdom 2206 · Alliance tracker</p>
+  <p class="sub" id="sub">Kingshot · Kingdom 2206 · Alliance tracker</p>
   <div class="bar">
     <label class="sr" for="q" style="position:absolute;left:-9999px">Filter members</label>
     <input id="q" type="search" placeholder="Filter by name">
@@ -75,6 +75,13 @@ function ago(t){
   for (const [n,u] of [[86400,"d"],[3600,"h"],[60,"m"]]) if (s>=n) return Math.floor(s/n)+u+" ago";
   return "just now";
 }
+// Levels above 30 are Truegold tiers: 35 = TG1, 40 = TG2, and so on.
+function tcLabel(n){
+  if(!n) return "-";
+  if(n<=30) return String(n);
+  const tier=Math.floor((n-30)/5), step=(n-30)%5;
+  return (tier?`TG${tier}`:"30")+(step?`-${step}`:"");
+}
 const fmt = n => n ? n.toLocaleString() : "-";
 
 let rows = [], sort = {k:"power", dir:-1};
@@ -99,7 +106,7 @@ function render(){
     <td>${esc(r.name)}</td>
     <td>${r.rank?`<span class="badge${r.rank===5?" r5":""}">R${r.rank}</span>`:"-"}</td>
     <td class="num">${fmt(r.power)}</td>
-    <td class="num">${r.tc??"-"}</td>
+    <td class="num">${tcLabel(r.tc)}</td>
     <td class="num">${r.vip??"-"}</td>
     <td class="num">${fmt(r.kills)}</td>
     <td>${esc(r.coords??"-")}</td></tr>`).join("")
@@ -116,6 +123,9 @@ async function load(){
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.members ?? data.data ?? []);
     rows = list.map(normalize);
+    const a = data.alliance;
+    if (a) $("sub").textContent = `Kingshot · Kingdom 2206 · ${fmt(a.power)} power · kingdom rank #${a.power_rank}`
+      + (data.cached_at ? ` · updated ${ago(parseActive(data.cached_at))}` : "");
     render();
   }catch(e){
     $("body").innerHTML = `<tr><td class="msg err">Couldn't load members (${esc(e.message)}). Try Refresh.</td></tr>`;
