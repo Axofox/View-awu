@@ -15,8 +15,9 @@ exports.handler = async (event) => {
   const headers = { Accept: "application/json", Authorization: `Bearer ${key}` };
 
   try {
-    if (path === "members") return await members(headers);
-    if (path === "gear") return await gear(headers, String(qs.ids || ""));
+    const fresh = qs.fresh === "1"; // Refresh button: skip caches, ask MightPulse to update
+    if (path === "members") return await members(headers, fresh);
+    if (path === "gear") return await gear(headers, String(qs.ids || ""), fresh);
     return json(400, { error: "Unknown route" });
   } catch (err) {
     return json(502, { error: "Upstream fetch failed", detail: String(err) });
@@ -24,11 +25,11 @@ exports.handler = async (event) => {
 };
 
 // Roster with name, power, Town Center, kills and rank: one fast call.
-async function members(headers) {
-  const res = await fetch(`${BASE}/alliances/${KID}/${TAG}?include=info,members_base`, { headers });
+async function members(headers, fresh) {
+  const res = await get(`${BASE}/alliances/${KID}/${TAG}?include=info,members_base`, headers, fresh);
   if (!res.ok) return upstreamError(res);
   const data = await res.json();
-  return ok({
+  return ok(fresh, {
     alliance: data.alliance,
     cached_at: data.cached_at,
     fresh: data.fresh,
@@ -46,17 +47,18 @@ async function members(headers) {
 // VIP, coordinates, governor gear and arena heroes for up to 50 players per call.
 // The page requests this in the background after the table is shown. The full-alliance
 // endpoint (members_full) returns the same data but is too slow for a function call.
-async function gear(headers, ids) {
+async function gear(headers, ids, fresh) {
   if (!/^\d{1,20}(,\d{1,20}){0,49}$/.test(ids)) return json(400, { error: "ids must be 1-50 numeric ids" });
-  const res = await fetch(`${BASE}/players?ids=${ids}&include=base,heroes,gov_gear`, { headers });
+  const res = await get(`${BASE}/players?ids=${ids}&include=base,heroes,gov_gear`, headers, fresh);
   if (!res.ok) return upstreamError(res);
   const data = await res.json();
-  return ok({
+  return ok(fresh, {
     players: (data.players || []).map((e) => {
       const p = e.player || {};
       const gg = e.gov_gear || {};
       return {
         governor_id: e.governor_id,
+        cached_at: e.cached_at,
         vip: p.vip,
         x: p.x,
         y: p.y,
@@ -90,19 +92,34 @@ async function gear(headers, ids) {
   });
 }
 
-function ok(obj) {
-  return {
-    statusCode: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=300",
-      // Netlify's CDN keeps a copy for 10 minutes and serves it while refreshing,
-      // so repeat visits are instant and use no API quota.
-      "Netlify-CDN-Cache-Control": "public, durable, max-age=600, stale-while-revalidate=86400",
-      "Netlify-Vary": "query=ids",
-    },
-    body: JSON.stringify(obj),
-  };
+// Normal loads use MightPulse's stored copy (up to an hour old). A forced refresh
+// asks for data at most a minute old and lets MightPulse wait up to 10 s to update it.
+// Netlify stops the function at about 30 s, so after 18 s we give up on the update
+// and return the stored copy instead of timing out.
+async function get(url, headers, fresh) {
+  if (!fresh) return fetch(url, { headers });
+  const start = Date.now();
+  try {
+    return await fetch(`${url}&max_age=60&wait=10`, { headers, signal: AbortSignal.timeout(18000) });
+  } catch (err) {
+    if (err.name !== "TimeoutError" && err.name !== "AbortError") throw err;
+    return fetch(url, { headers, signal: AbortSignal.timeout(Math.max(3000, 27000 - (Date.now() - start))) });
+  }
+}
+
+function ok(fresh, obj) {
+  const headers = { "Content-Type": "application/json" };
+  if (fresh) {
+    headers["Cache-Control"] = "no-store";
+    headers["Netlify-CDN-Cache-Control"] = "no-store";
+  } else {
+    headers["Cache-Control"] = "public, max-age=120";
+    // Netlify's CDN keeps a copy for 5 minutes and serves it while refreshing,
+    // so repeat visits are instant and use no API quota.
+    headers["Netlify-CDN-Cache-Control"] = "public, durable, max-age=300, stale-while-revalidate=86400";
+    headers["Netlify-Vary"] = "query=ids|fresh";
+  }
+  return { statusCode: 200, headers, body: JSON.stringify(obj) };
 }
 
 async function upstreamError(res) {

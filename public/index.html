@@ -36,6 +36,8 @@
   td.up{color:var(--accent)} td.down{color:#f87171}
   .detail section h2:not(:first-child){margin-top:14px}
   .q{color:var(--muted);font-size:13px} .q.red{color:#f87171}
+  .updated{color:var(--muted);font-size:13px;flex-basis:100%}
+  button:disabled{opacity:.6;cursor:progress}
   .hint{color:var(--muted);font-size:13px;margin:8px 2px}
   .msg{padding:24px;color:var(--muted)} .err{color:#f87171}
   button{background:var(--accent);color:#04201c;border:0;padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer}
@@ -50,6 +52,7 @@
     <input id="q" type="search" placeholder="Filter by name">
     <span class="count" id="count"></span>
     <button id="refresh">Refresh</button>
+    <span class="updated" id="updated" aria-live="polite"></span>
   </div>
   <p class="hint" id="hint">Select a name to see that member's hero gear and power history.</p>
   <div class="wrap"><table>
@@ -178,17 +181,19 @@ async function loadHistory(){
   }catch(e){ /* table stays usable without history */ }
 }
 // Second step: VIP, coordinates, governor gear and heroes, 50 members per request.
-async function loadGear(){
-  gearState = "loading"; render();
+async function loadGear(force){
+  gearState = "loading"; gearAt = null; render();
   const ids = rows.map(r => r.uid).filter(id => /^\d+$/.test(id));
   const chunks = []; for (let i=0;i<ids.length;i+=50) chunks.push(ids.slice(i,i+50));
-  const byId = new Map(rows.map(r => [r.uid, r]));
   await Promise.all(chunks.map(async c => {
     try{
-      const res = await fetch("/api/gear?ids=" + c.join(","));
+      const res = await fetch("/api/gear?ids=" + c.join(",") + (force ? "&fresh=1" : ""));
       if(!res.ok) return;
-      for (const p of (await res.json()).players || []) {
+      const players = (await res.json()).players || [];
+      const byId = new Map(rows.map(r => [r.uid, r]));
+      for (const p of players) {
         const r = byId.get(String(p.governor_id)); if(!r) continue;
+        if (p.cached_at && (!gearAt || p.cached_at < gearAt)) gearAt = p.cached_at;
         r.vip = p.vip ?? null;
         r.coords = p.x!=null && p.y!=null ? `${p.x}, ${p.y}` : null;
         r.gov = p.gov_gear; r.heroes = p.heroes || [];
@@ -201,24 +206,53 @@ async function loadGear(){
   }));
   gearState = "done"; render();
 }
+
+// "Updated" line: how old MightPulse's data is, and when this page last checked.
+let rosterAt = null, gearAt = null, checkedAt = null, loading = false;
+function showUpdated(){
+  if (loading) { $("updated").textContent = "Refreshing from MightPulse… this can take up to 30 seconds."; return; }
+  if (!checkedAt) { $("updated").textContent = ""; return; }
+  const parts = [];
+  if (rosterAt) parts.push(`Power updated ${ago(parseActive(rosterAt))}`);
+  if (gearAt) parts.push(`gear ${ago(parseActive(gearAt))}`);
+  parts.push(`checked ${checkedAt.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}`);
+  $("updated").textContent = parts.join(" · ");
+}
+setInterval(showUpdated, 60000);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-async function load(){
-  $("body").innerHTML = `<tr><td class="msg">Loading members…</td></tr>`;
+async function load(force){
+  const btn = $("refresh");
+  btn.disabled = true; btn.textContent = force ? "Refreshing…" : "Loading…";
+  loading = !!force; showUpdated();
+  if (!rows.length) $("body").innerHTML = `<tr><td class="msg">Loading members…</td></tr>`;
+  // On Refresh the members are already known, so gear starts at the same time.
+  const early = force && rows.length ? loadGear(true) : null;
   try{
-    const res = await fetch("/api/members");
+    const res = await fetch("/api/members" + (force ? "?fresh=1" : ""));
     if(!res.ok) throw new Error("Server returned " + res.status);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.members ?? data.data ?? []);
-    rows = list.map(normalize);
+    // Keep gear and history already shown until the new copies arrive.
+    const prev = new Map(rows.map(r => [r.uid, r]));
+    rows = list.map(normalize).map(r => {
+      const o = prev.get(r.uid);
+      return o ? {...r, vip:o.vip, coords:o.coords, gov:o.gov, heroes:o.heroes, gear:o.gear, growth:o.growth, points:o.points} : r;
+    });
+    rosterAt = data.cached_at ?? null;
     const a = data.alliance;
-    if (a) $("sub").textContent = `Kingshot · Kingdom 2206 · ${fmt(a.power)} power · kingdom rank #${a.power_rank}`
-      + (data.cached_at ? ` · updated ${ago(parseActive(data.cached_at))}` : "");
-    loadGear(); loadHistory();
+    if (a) $("sub").textContent = `Kingshot · Kingdom 2206 · ${fmt(a.power)} power · kingdom rank #${a.power_rank}`;
     render();
+    await Promise.all([early || loadGear(force), loadHistory()]);
+    checkedAt = new Date();
   }catch(e){
-    $("body").innerHTML = `<tr><td class="msg err">Couldn't load members (${esc(e.message)}). Try Refresh.</td></tr>`;
+    if (!rows.length) $("body").innerHTML = `<tr><td class="msg err">Couldn't load members (${esc(e.message)}). Try Refresh.</td></tr>`;
+    else $("updated").textContent = `Couldn't refresh (${e.message}). Showing the last data. Try again in a minute.`;
+    loading = false; btn.disabled = false; btn.textContent = "Refresh";
+    return;
   }
+  loading = false; btn.disabled = false; btn.textContent = "Refresh";
+  showUpdated();
 }
 $("head").addEventListener("click", e => {
   const th = e.target.closest("th"); if(!th) return;
@@ -235,8 +269,8 @@ $("body").addEventListener("click", e => {
   if (again) again.focus();
 });
 $("q").addEventListener("input", render);
-$("refresh").addEventListener("click", load);
-renderHead(); load();
+$("refresh").addEventListener("click", () => load(true));
+renderHead(); load(false);
 </script>
 </body>
 </html>
