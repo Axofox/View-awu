@@ -2,7 +2,7 @@
   "name": "view-awu",
   "private": true,
   "dependencies": {
-    "@netlify/database": "latest",
+    "@netlify/blobs": "^11.1.9",
     "@netlify/functions": "latest"
   }
 }

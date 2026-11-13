@@ -1,11 +1,11 @@
 import type { Config } from "@netlify/functions";
 import { takeSnapshot } from "../lib/snapshot.mts";
 
-// Records every member's power. Runs four times a day so one failed run
-// doesn't leave a gap; each run overwrites that day's row.
+// Records every member's power and hero gear level. Runs four times a day so one
+// failed run doesn't leave a gap; each run overwrites that day's entry.
 export default async () => {
   const count = await takeSnapshot();
-  console.log(`Stored power snapshot for ${count} members`);
+  console.log(`Stored snapshot for ${count} members`);
 };
 
 export const config: Config = {

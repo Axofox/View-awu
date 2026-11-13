@@ -70,6 +70,7 @@ const COLS = [
   {k:"kills",  label:"Kills",  num:true},
   {k:"growth", label:"Growth", num:true},
   {k:"gear",   label:"Hero gear", num:true},
+  {k:"gearGrowth", label:"Gear growth", num:true},
   {k:"coords", label:"Coords"},
 ];
 // MightPulse field names are not verified, so try several likely keys.
@@ -85,7 +86,7 @@ function normalize(m){
     vip: Number(pick(m, ["vip","vip_level","vipLevel"])) || null,
     kills: Number(m.kills) || null,
     gov: null, heroes: [], gear: null, // filled in by loadGear()
-    growth: null, points: [],          // filled in by loadHistory()
+    growth: null, gearGrowth: null, points: [], // filled in by loadHistory()
     coords: m.coords ?? m.coordinates ?? (x != null && y != null ? `${x}, ${y}` : null),
   };
 }
@@ -132,6 +133,7 @@ function render(){
     <td class="num">${fmt(r.kills)}</td>
     <td class="num${r.growth>0?" up":r.growth<0?" down":""}">${r.growth==null?"-":signed(r.growth)}</td>
     <td class="num">${r.gear!=null?"+"+r.gear:!r.gov&&gearState==="loading"?"…":"-"}</td>
+    <td class="num${r.gearGrowth>0?" up":r.gearGrowth<0?" down":""}">${r.gearGrowth==null?"-":signed(r.gearGrowth)}</td>
     <td>${esc(r.coords??"-")}</td></tr>${open.has(r.uid)?detail(r):""}`).join("")
     : `<tr><td class="msg">No members match.</td></tr>`;
   renderHead();
@@ -147,7 +149,10 @@ function detail(r){
         ${h.gear.length?`<ul>${h.gear.map(g => `<li><b>${esc(g.slot)}</b> ${esc(g.name)} <span class="q${g.red?" red":""}">${esc(g.quality??"")} +${g.level??0}${g.refine?` · mastery ${g.refine}`:""}</span></li>`).join("")}</ul>`:""}</div>`).join("")
     : `<p class="q">No arena heroes on record.</p>`;
   const hist = r.points.length
-    ? `<ul>${r.points.slice(-8).reverse().map((p,i,a) => { const prev=a[i+1]; return `<li><b>${esc(p[0])}</b> ${fmt(p[1])}${prev?` <span class="q">${signed(p[1]-prev[1])}</span>`:""}</li>`; }).join("")}</ul>`
+    ? `<ul>${r.points.slice(-8).reverse().map((p,i,a) => { const prev=a[i+1];
+        const gd = prev && p[2]!=null && prev[2]!=null ? Math.round((p[2]-prev[2])*10)/10 : null;
+        return `<li><b>${esc(p[0])}</b> ${fmt(p[1])}${prev?` <span class="q">${signed(p[1]-prev[1])}</span>`:""}`
+          + `${p[2]!=null?` <span class="q">· gear +${p[2]}${gd?` (${signed(gd)})`:""}</span>`:""}</li>`; }).join("")}</ul>`
     : `<p class="q">No power history yet. It's recorded once a day from now on.</p>`;
   return `<tr class="detail"><td colspan="${COLS.length}"><div class="cols">
     <section><h2>Hero gear (arena team)</h2>${heroes}</section>
@@ -167,15 +172,18 @@ async function loadHistory(){
     let since = null;
     for (const m of (await res.json()).members || []) {
       const r = byId.get(String(m.governor_id)); if(!r) continue;
-      r.points = m.points.map(p => [p[0], Number(p[1])]);
+      r.points = m.points.map(p => [p[0], Number(p[1]), p[2]==null ? null : Number(p[2])]);
       const base = r.points.find(p => p[0] >= cutoff);
-      if (base && base[0] < new Date().toISOString().slice(0,10)) {
-        r.growth = (r.power || r.points[r.points.length-1][1]) - base[1];
+      const last = r.points[r.points.length-1];
+      if (base && base !== last) {
+        r.growth = (r.power || last[1]) - base[1];
+        const gb = r.points.find(p => p[0] >= cutoff && p[2]!=null);
+        if (gb && gb !== last && last[2]!=null) r.gearGrowth = Math.round((last[2]-gb[2])*10)/10;
         if (!since || base[0] < since) since = base[0];
       }
     }
     $("hint").textContent = "Select a name to see that member's hero gear and power history. "
-      + (since ? `Growth is power gained since ${since} (7 days at most).`
+      + (since ? `Growth columns compare with ${since} (7 days at most). Gear growth is the change in average hero gear level.`
                : "Growth appears after the second daily snapshot.");
     render();
   }catch(e){ /* table stays usable without history */ }
@@ -199,7 +207,7 @@ async function loadGear(force){
         r.gov = p.gov_gear; r.heroes = p.heroes || [];
         // Hero gear column: average upgrade level across the arena team's gear pieces.
         const pieces = r.heroes.flatMap(h => h.gear);
-        r.gear = pieces.length ? Math.round(pieces.reduce((t,g)=>t+(g.level||0),0)/pieces.length) : null;
+        r.gear = pieces.length ? Math.round(pieces.reduce((t,g)=>t+(g.level||0),0)/pieces.length*10)/10 : null;
       }
     }catch(e){ /* table stays usable without gear */ }
     render();
