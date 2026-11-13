@@ -24,7 +24,7 @@ exports.handler = async (event) => {
   }
 };
 
-// Roster with name, power, Town Center, kills and rank: one fast call.
+// Roster with name, power, Town Center and rank: one call.
 async function members(headers, fresh) {
   const res = await get(`${BASE}/alliances/${KID}/${TAG}?include=info,members_base`, headers, fresh);
   if (!res.ok) return upstreamError(res);
@@ -38,13 +38,12 @@ async function members(headers, fresh) {
       nick_name: m.nick_name,
       power: m.power,
       town_center_level: m.town_center_level,
-      kills: m.kills,
       alliance_rank: m.alliance_rank,
     })),
   });
 }
 
-// VIP, coordinates, governor gear and arena heroes for up to 50 players per call.
+// VIP, governor gear and arena heroes for up to 50 players per call.
 // The page requests this in the background after the table is shown. The full-alliance
 // endpoint (members_full) returns the same data but is too slow for a function call.
 async function gear(headers, ids, fresh) {
@@ -60,8 +59,6 @@ async function gear(headers, ids, fresh) {
         governor_id: e.governor_id,
         cached_at: e.cached_at,
         vip: p.vip,
-        x: p.x,
-        y: p.y,
         gov_gear: {
           hidden: !!gg.hidden,
           items: (gg.items || []).map((i) => ({
