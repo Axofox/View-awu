@@ -46,6 +46,13 @@
   .updated{color:var(--muted);font-size:13px;flex-basis:100%}
   button:disabled{opacity:.6;cursor:progress}
   .hint{color:var(--muted);font-size:13px;margin:8px 2px}
+  button.tip{width:18px;height:18px;border-radius:50%;padding:0;margin-left:6px;vertical-align:1px;
+    font:600 11px/16px system-ui,sans-serif;color:var(--muted);background:none;border:1px solid var(--line)}
+  button.tip.grew{color:#04201c;background:var(--accent);border-color:var(--accent)}
+  button.tip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  #tip{position:fixed;z-index:10;max-width:260px;padding:10px 12px;border-radius:8px;background:var(--panel);
+    border:1px solid var(--line);box-shadow:0 6px 20px rgba(0,0,0,.45);font-size:13px;line-height:1.5}
+  #tip[hidden]{display:none} #tip b{color:var(--text)} #tip .up{color:var(--accent)} #tip .down{color:#f87171}
   .msg{padding:24px;color:var(--muted)} .err{color:#f87171}
   button{background:var(--accent);color:#04201c;border:0;padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer}
 </style>
@@ -61,7 +68,7 @@
     <button id="refresh">Refresh</button>
     <span class="updated" id="updated" aria-live="polite"></span>
   </div>
-  <p class="hint" id="hint">Select a name to see that member's hero gear and power history.</p>
+  <p class="hint" id="hint">Select a name for hero gear and history. The circle next to a name shows what grew in the last 7 days.</p>
   <div class="wrap"><table>
     <thead><tr id="head"></tr></thead>
     <tbody id="body"><tr><td class="msg">Loading members…</td></tr></tbody>
@@ -71,6 +78,7 @@
     <div id="log"><p class="q">Loading…</p></div>
   </section>
 </main>
+<div id="tip" role="tooltip" hidden></div>
 <script>
 const COLS = [
   {k:"name",   label:"Name"},
@@ -128,6 +136,7 @@ function renderHead(){
 }
 function val(r,k){ return r[k]; }
 function render(){
+  hideTip();
   const q = $("q").value.trim().toLowerCase();
   const list = rows.filter(r => r.name.toLowerCase().includes(q)).sort((a,b) => {
     const x = val(a,sort.k), y = val(b,sort.k);
@@ -136,7 +145,7 @@ function render(){
   });
   $("count").textContent = `${list.length} of ${rows.length} members`;
   $("body").innerHTML = list.length ? list.map(r => `<tr>
-    <td><button class="name" aria-expanded="${open.has(r.uid)}" data-uid="${esc(r.uid)}">${esc(r.name)}</button>${r.joined?`<span class="new" title="Joined ${esc(r.joined)}">NEW</span>`:""}</td>
+    <td><button class="name" aria-expanded="${open.has(r.uid)}" data-uid="${esc(r.uid)}">${esc(r.name)}</button>${historyLoaded?`<button class="tip${weekGrew(r)?" grew":""}" data-tip="${esc(r.uid)}" aria-label="What grew in the last 7 days for ${esc(r.name)}">${weekGrew(r)?"↑":"i"}</button>`:""}${r.joined?`<span class="new" title="Joined ${esc(r.joined)}">NEW</span>`:""}</td>
     <td>${r.rank?`<span class="badge${r.rank===5?" r5":""}">R${r.rank}</span>`:"-"}</td>
     <td class="num">${fmt(r.power)}</td>
     <td class="num">${tcLabel(r.tc)}</td>
@@ -184,6 +193,43 @@ function renderLog(log, byId){
         + `</li>`).join("")}</ol>`
     : `<p class="q">No changes yet. Members who join, leave or change rank will be listed here, checked once a day.</p>`;
 }
+// 7-day summary for the circle next to each name: compares the oldest snapshot in
+// the last 7 days with the newest one, for every metric both snapshots have.
+let historyLoaded = false;
+function weekSummary(r, cutoff){
+  const pts = r.points.filter(p => p[0] >= cutoff);
+  if (pts.length < 2) return null;
+  const first = i => pts.find(p => p[i]!=null), last = i => [...pts].reverse().find(p => p[i]!=null);
+  const diff = i => { const a=first(i), b=last(i); return a && b && a!==b ? Math.round((b[i]-a[i])*10)/10 : null; };
+  const t0 = first(3), t1 = last(3);
+  return { since: pts[0][0], power: diff(1), gear: diff(2), kills: diff(4), gov: diff(5),
+           tc: t0 && t1 && t0!==t1 && t1[3]!==t0[3] ? [t0[3], t1[3]] : null };
+}
+const weekGrew = r => !!r.week && ["power","gear","kills","gov"].some(k => r.week[k] > 0) || !!(r.week && r.week.tc);
+const compact = n => { const a=Math.abs(n); return a>=1e9?(n/1e9).toFixed(1)+"B":a>=1e6?(n/1e6).toFixed(1)+"M":a>=1e4?Math.round(n/1e3)+"k":n.toLocaleString(); };
+function weekText(r){
+  const w = r.week;
+  if (!w) return `<b>${esc(r.name)}</b><br><span class="q">Not enough history yet. This fills in after two daily snapshots.</span>`;
+  const line = (label, v, unit="") => v ? `<div>${label} <span class="${v>0?"up":"down"}">${v>0?"+":"−"}${compact(Math.abs(v))}${unit}</span></div>` : "";
+  const body = line("Power", w.power)
+    + line("Hero gear", w.gear, w.gear && Math.abs(w.gear)===1 ? " level" : " levels")
+    + line("Governor gear", w.gov, " score")
+    + (w.tc ? `<div>Town Center <span class="up">${tcLabel(w.tc[0])} → ${tcLabel(w.tc[1])}</span></div>` : "")
+    + line("Kills", w.kills);
+  return `<b>${esc(r.name)}</b> <span class="q">since ${esc(w.since)}</span>` + (body || `<div class="q">No change in the last 7 days.</div>`);
+}
+// One shared tooltip, positioned next to the circle: hover or focus on desktop, tap on phones.
+let tipFor = null, tipPinned = false; // pinned = opened by a click or tap
+function showTip(btn){
+  const r = rows.find(x => x.uid === btn.dataset.tip); if (!r) return;
+  const tip = $("tip"); tip.innerHTML = weekText(r); tip.hidden = false; tipFor = btn;
+  btn.setAttribute("aria-describedby", "tip");
+  const b = btn.getBoundingClientRect(), t = tip.getBoundingClientRect();
+  const left = Math.min(Math.max(8, b.left + b.width/2 - t.width/2), innerWidth - t.width - 8);
+  const top = b.bottom + 8 + t.height > innerHeight ? b.top - t.height - 8 : b.bottom + 8;
+  tip.style.left = left + "px"; tip.style.top = top + "px";
+}
+function hideTip(){ if (tipFor) tipFor.removeAttribute("aria-describedby"); $("tip").hidden = true; tipFor = null; tipPinned = false; }
 const signed = n => (n>0?"+":n<0?"−":"") + Math.abs(n).toLocaleString();
 // Power history from the database: growth = latest power minus the oldest
 // snapshot within the last 7 days.
@@ -193,24 +239,22 @@ async function loadHistory(){
     if(!res.ok) return;
     const byId = new Map(rows.map(r => [r.uid, r]));
     const cutoff = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
-    let since = null;
     const data = await res.json();
     for (const m of data.members || []) {
       const r = byId.get(String(m.governor_id)); if(!r) continue;
-      r.points = m.points.map(p => [p[0], Number(p[1]), p[2]==null ? null : Number(p[2])]);
+      const num = v => v==null ? null : Number(v);
+      r.points = m.points.map(p => [p[0], Number(p[1]), num(p[2]), num(p[3]), num(p[4]), num(p[5])]);
+      r.week = weekSummary(r, cutoff);
       const base = r.points.find(p => p[0] >= cutoff);
       const last = r.points[r.points.length-1];
       if (base && base !== last) {
         r.growth = (r.power || last[1]) - base[1];
         const gb = r.points.find(p => p[0] >= cutoff && p[2]!=null);
         if (gb && gb !== last && last[2]!=null) r.gearGrowth = Math.round((last[2]-gb[2])*10)/10;
-        if (!since || base[0] < since) since = base[0];
       }
     }
     renderLog(data.log || [], byId);
-    $("hint").textContent = "Select a name to see that member's hero gear and power history. "
-      + (since ? `Growth columns compare with ${since} (7 days at most). Gear growth is the change in average hero gear level.`
-               : "Growth appears after the second daily snapshot.");
+    historyLoaded = true;
     render();
   }catch(e){ /* table stays usable without history */ }
 }
@@ -295,6 +339,9 @@ $("head").addEventListener("click", e => {
   render();
 });
 $("body").addEventListener("click", e => {
+  const t = e.target.closest("button.tip");
+  // A tap also fires mouseover first, so only a second click on a pinned tip closes it.
+  if (t) { if (tipPinned && tipFor === t) hideTip(); else { showTip(t); tipPinned = true; } return; }
   const b = e.target.closest("button.name"); if(!b) return;
   const id = b.dataset.uid;
   open.has(id) ? open.delete(id) : open.add(id);
@@ -302,6 +349,14 @@ $("body").addEventListener("click", e => {
   const again = document.querySelector(`button.name[data-uid="${CSS.escape(id)}"]`);
   if (again) again.focus();
 });
+$("body").addEventListener("mouseover", e => { const t = e.target.closest("button.tip"); if (t && !tipPinned && tipFor !== t) showTip(t); });
+$("body").addEventListener("mouseout", e => { if (!tipPinned && e.target.closest("button.tip") && !e.relatedTarget?.closest?.("button.tip")) hideTip(); });
+// Keyboard focus only: a tap also focuses the button and is handled by the click above.
+$("body").addEventListener("focusin", e => { const t = e.target.closest("button.tip"); if (t && !tipPinned && t.matches(":focus-visible")) showTip(t); });
+$("body").addEventListener("focusout", e => { if (!tipPinned && e.target.closest("button.tip")) hideTip(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") hideTip(); });
+document.addEventListener("click", e => { if (tipFor && !e.target.closest("button.tip")) hideTip(); });
+addEventListener("scroll", hideTip, true); addEventListener("resize", hideTip);
 $("q").addEventListener("input", render);
 $("refresh").addEventListener("click", () => load(true));
 renderHead(); load(false);

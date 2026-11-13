@@ -5,10 +5,14 @@ const KID = "2206"; // kingdom
 const TAG = "AWU"; // alliance tag (case-sensitive)
 
 // One Netlify Blobs entry per UTC day, key "YYYY-MM-DD":
-// { date, members: { [governor_id]: { n: name, p: power, g: avg hero gear level | null, r: rank 1-5 } } }
+// { date, members: { [governor_id]: { n: name, p: power, g: avg hero gear level, r: rank 1-5,
+//   t: Town Center level, k: kills, gg: governor gear score (null when hidden) } } }
 export type DaySnapshot = {
   date: string;
-  members: Record<string, { n: string | null; p: number; g: number | null; r?: number | null }>;
+  members: Record<
+    string,
+    { n: string | null; p: number; g: number | null; r?: number | null; t?: number | null; k?: number | null; gg?: number | null }
+  >;
 };
 
 export const historyStore = () => getStore("power-history");
@@ -40,18 +44,24 @@ export async function takeSnapshot(): Promise<number> {
   if (!roster.length) return 0;
 
   const ids: string[] = roster.map((m: any) => String(m.governor_id));
-  const gear = new Map<string, number | null>();
+  const gear = new Map<string, { g: number | null; gg: number | null }>();
   const chunks: string[][] = [];
   for (let i = 0; i < ids.length; i += 50) chunks.push(ids.slice(i, i + 50));
   await Promise.all(
     chunks.map(async (chunk) => {
       try {
-        const r = await fetch(`${BASE}/players?ids=${chunk.join(",")}&include=heroes`, {
+        const r = await fetch(`${BASE}/players?ids=${chunk.join(",")}&include=heroes,gov_gear`, {
           headers,
           signal: AbortSignal.timeout(12000),
         });
         if (!r.ok) return;
-        for (const p of (await r.json()).players || []) gear.set(String(p.governor_id), avgGearLevel(p.heroes));
+        for (const p of (await r.json()).players || []) {
+          const items = p.gov_gear && !p.gov_gear.hidden ? p.gov_gear.items || [] : [];
+          gear.set(String(p.governor_id), {
+            g: avgGearLevel(p.heroes),
+            gg: items.length ? items.reduce((t: number, i: any) => t + (i.score || 0), 0) : null,
+          });
+        }
       } catch {
         // Keep power even when gear is unavailable.
       }
@@ -68,7 +78,10 @@ export async function takeSnapshot(): Promise<number> {
       n: m.nick_name ?? null,
       p: m.power,
       r: m.alliance_rank ?? null,
-      g: gear.has(id) ? gear.get(id)! : earlier?.members[id]?.g ?? null,
+      t: m.town_center_level ?? null,
+      k: m.kills ?? null,
+      g: gear.has(id) ? gear.get(id)!.g : earlier?.members[id]?.g ?? null,
+      gg: gear.has(id) ? gear.get(id)!.gg : earlier?.members[id]?.gg ?? null,
     };
   }
   await store.setJSON(date, snap);
