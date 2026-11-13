@@ -35,7 +35,14 @@
   .detail p{margin:0} .hero{margin-bottom:6px}
   td.up{color:var(--accent)} td.down{color:#f87171}
   .detail section h2:not(:first-child){margin-top:14px}
-  .q{color:var(--muted);font-size:13px} .q.red{color:#f87171}
+  .q{color:var(--muted);font-size:13px}
+  .log{margin-top:24px} .log h2{font-size:16px;margin:0 0 8px}
+  .log ol{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  .log li{padding:10px 12px;border-bottom:1px solid var(--line)} .log li:last-child{border-bottom:0}
+  .log .day{color:var(--muted);font-size:13px;margin-bottom:2px}
+  .tag{display:inline-block;font-size:12px;font-weight:600;padding:0 6px;border-radius:4px;margin-right:6px}
+  .tag.in{color:#04201c;background:var(--accent)} .tag.out{color:#fff;background:#b91c1c} .tag.rk{color:var(--accent);border:1px solid var(--accent)}
+  .new{font-size:11px;font-weight:600;color:var(--accent);margin-left:6px;vertical-align:1px} .q.red{color:#f87171}
   .updated{color:var(--muted);font-size:13px;flex-basis:100%}
   button:disabled{opacity:.6;cursor:progress}
   .hint{color:var(--muted);font-size:13px;margin:8px 2px}
@@ -59,6 +66,10 @@
     <thead><tr id="head"></tr></thead>
     <tbody id="body"><tr><td class="msg">Loading members…</td></tr></tbody>
   </table></div>
+  <section class="log" aria-labelledby="log-h">
+    <h2 id="log-h">Member log</h2>
+    <div id="log"><p class="q">Loading…</p></div>
+  </section>
 </main>
 <script>
 const COLS = [
@@ -125,7 +136,7 @@ function render(){
   });
   $("count").textContent = `${list.length} of ${rows.length} members`;
   $("body").innerHTML = list.length ? list.map(r => `<tr>
-    <td><button class="name" aria-expanded="${open.has(r.uid)}" data-uid="${esc(r.uid)}">${esc(r.name)}</button></td>
+    <td><button class="name" aria-expanded="${open.has(r.uid)}" data-uid="${esc(r.uid)}">${esc(r.name)}</button>${r.joined?`<span class="new" title="Joined ${esc(r.joined)}">NEW</span>`:""}</td>
     <td>${r.rank?`<span class="badge${r.rank===5?" r5":""}">R${r.rank}</span>`:"-"}</td>
     <td class="num">${fmt(r.power)}</td>
     <td class="num">${tcLabel(r.tc)}</td>
@@ -160,6 +171,19 @@ function detail(r){
 }
 const open = new Set();
 let gearState = "idle";
+// Member log: joins, departures and rank changes found between daily snapshots.
+function renderLog(log, byId){
+  const weekAgo = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+  for (const e of log) if (e.date >= weekAgo) for (const j of e.joined) { const r = byId.get(String(j.id)); if (r && !r.joined) r.joined = e.date; }
+  const name = w => `<b>${esc(w.name ?? w.id)}</b> <span class="q">${fmt(w.power)}</span>`;
+  $("log").innerHTML = log.length
+    ? `<ol>${log.map(e => `<li><div class="day">${esc(e.date)} <span class="q">(since ${esc(e.since)})</span></div>`
+        + e.joined.map(w => `<div><span class="tag in">Joined</span>${name(w)}</div>`).join("")
+        + e.left.map(w => `<div><span class="tag out">Left</span>${name(w)}</div>`).join("")
+        + e.rank.map(w => `<div><span class="tag rk">${w.to > w.from ? "Promoted" : "Demoted"}</span>${name(w)} <span class="q">R${w.from} → R${w.to}</span></div>`).join("")
+        + `</li>`).join("")}</ol>`
+    : `<p class="q">No changes yet. Members who join, leave or change rank will be listed here, checked once a day.</p>`;
+}
 const signed = n => (n>0?"+":n<0?"−":"") + Math.abs(n).toLocaleString();
 // Power history from the database: growth = latest power minus the oldest
 // snapshot within the last 7 days.
@@ -170,7 +194,8 @@ async function loadHistory(){
     const byId = new Map(rows.map(r => [r.uid, r]));
     const cutoff = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
     let since = null;
-    for (const m of (await res.json()).members || []) {
+    const data = await res.json();
+    for (const m of data.members || []) {
       const r = byId.get(String(m.governor_id)); if(!r) continue;
       r.points = m.points.map(p => [p[0], Number(p[1]), p[2]==null ? null : Number(p[2])]);
       const base = r.points.find(p => p[0] >= cutoff);
@@ -182,6 +207,7 @@ async function loadHistory(){
         if (!since || base[0] < since) since = base[0];
       }
     }
+    renderLog(data.log || [], byId);
     $("hint").textContent = "Select a name to see that member's hero gear and power history. "
       + (since ? `Growth columns compare with ${since} (7 days at most). Gear growth is the change in average hero gear level.`
                : "Growth appears after the second daily snapshot.");

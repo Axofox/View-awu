@@ -5,10 +5,10 @@ const KID = "2206"; // kingdom
 const TAG = "AWU"; // alliance tag (case-sensitive)
 
 // One Netlify Blobs entry per UTC day, key "YYYY-MM-DD":
-// { date, members: { [governor_id]: { n: name, p: power, g: avg hero gear level | null } } }
+// { date, members: { [governor_id]: { n: name, p: power, g: avg hero gear level | null, r: rank 1-5 } } }
 export type DaySnapshot = {
   date: string;
-  members: Record<string, { n: string | null; p: number; g: number | null }>;
+  members: Record<string, { n: string | null; p: number; g: number | null; r?: number | null }>;
 };
 
 export const historyStore = () => getStore("power-history");
@@ -67,6 +67,7 @@ export async function takeSnapshot(): Promise<number> {
     snap.members[id] = {
       n: m.nick_name ?? null,
       p: m.power,
+      r: m.alliance_rank ?? null,
       g: gear.has(id) ? gear.get(id)! : earlier?.members[id]?.g ?? null,
     };
   }
