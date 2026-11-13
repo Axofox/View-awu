@@ -24,6 +24,17 @@
   td.num{font-variant-numeric:tabular-nums}
   .badge{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--accent);color:var(--accent);font-size:12px;font-weight:600}
   .badge.r5{background:var(--accent);color:#04201c}
+  button.name{background:none;color:var(--text);padding:0;font:inherit;font-weight:600;text-align:left}
+  button.name::before{content:"▸ ";color:var(--accent)}
+  button.name[aria-expanded=true]::before{content:"▾ "}
+  button.name:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+  tr.detail td{white-space:normal;background:var(--bg);padding:14px 16px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;max-width:calc(100vw - 66px)}
+  .detail h2{margin:0 0 6px;font-size:13px;color:var(--accent);font-weight:600}
+  .detail ul{margin:4px 0 10px;padding-left:18px} .detail li{margin:2px 0}
+  .detail p{margin:0} .hero{margin-bottom:6px}
+  .q{color:var(--muted);font-size:13px} .q.red{color:#f87171}
+  .hint{color:var(--muted);font-size:13px;margin:8px 2px}
   .msg{padding:24px;color:var(--muted)} .err{color:#f87171}
   button{background:var(--accent);color:#04201c;border:0;padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer}
 </style>
@@ -38,6 +49,7 @@
     <span class="count" id="count"></span>
     <button id="refresh">Refresh</button>
   </div>
+  <p class="hint">Select a name to see that member's gear and heroes.</p>
   <div class="wrap"><table>
     <thead><tr id="head"></tr></thead>
     <tbody id="body"><tr><td class="msg">Loading members…</td></tr></tbody>
@@ -51,6 +63,7 @@ const COLS = [
   {k:"tc",     label:"TC",    num:true},
   {k:"vip",    label:"VIP",   num:true},
   {k:"kills",  label:"Kills",  num:true},
+  {k:"gear",   label:"Gov gear", num:true},
   {k:"coords", label:"Coords"},
 ];
 // MightPulse field names are not verified, so try several likely keys.
@@ -58,13 +71,14 @@ const pick = (o, keys) => { for (const k of keys) if (o[k] != null) return o[k];
 function normalize(m){
   const x = m.x ?? m.coord_x, y = m.y ?? m.coord_y;
   return {
-    uid: pick(m, ["uid","id","player_id","playerId"]),
+    uid: String(pick(m, ["governor_id","uid","id"])),
     name: pick(m, ["nick_name","name","nickname","player_name","playerName"]) ?? "?",
     rank: Number(String(pick(m, ["alliance_rank_label","alliance_rank","rank_label","rank","role"]) ?? "").replace(/\D/g,"")) || null,
     power: Number(pick(m, ["power","total_power","totalPower"])) || 0,
     tc: Number(pick(m, ["town_center_level","tc_level","tcLevel","tc","level"])) || null,
     vip: Number(pick(m, ["vip","vip_level","vipLevel"])) || null,
     kills: Number(m.kills) || null,
+    gov: null, heroes: [], gear: null, // filled in by loadGear()
     coords: m.coords ?? m.coordinates ?? (x != null && y != null ? `${x}, ${y}` : null),
   };
 }
@@ -103,15 +117,54 @@ function render(){
   });
   $("count").textContent = `${list.length} of ${rows.length} members`;
   $("body").innerHTML = list.length ? list.map(r => `<tr>
-    <td>${esc(r.name)}</td>
+    <td><button class="name" aria-expanded="${open.has(r.uid)}" data-uid="${esc(r.uid)}">${esc(r.name)}</button></td>
     <td>${r.rank?`<span class="badge${r.rank===5?" r5":""}">R${r.rank}</span>`:"-"}</td>
     <td class="num">${fmt(r.power)}</td>
     <td class="num">${tcLabel(r.tc)}</td>
     <td class="num">${r.vip??"-"}</td>
     <td class="num">${fmt(r.kills)}</td>
-    <td>${esc(r.coords??"-")}</td></tr>`).join("")
+    <td class="num">${r.gear?fmt(r.gear):!r.gov?(gearState==="loading"?"…":"-"):r.gov.hidden?"Hidden":"-"}</td>
+    <td>${esc(r.coords??"-")}</td></tr>${open.has(r.uid)?detail(r):""}`).join("")
     : `<tr><td class="msg">No members match.</td></tr>`;
   renderHead();
+}
+function detail(r){
+  if(!r.gov) return `<tr class="detail"><td colspan="${COLS.length}"><p class="q">${
+    gearState==="loading" ? "Loading gear…" : "Gear isn't available for this member right now. Try Refresh."}</p></td></tr>`;
+  const gov = r.gov.items.length
+    ? `<ul>${r.gov.items.map(i => `<li><b>${esc(i.slot)}</b> ${esc(i.name)} <span class="q">${esc(i.tier??"")}${i.star?` ${i.star}★`:""} · Lv ${i.level??"-"} · ${fmt(i.score)}</span></li>`).join("")}</ul>`
+    : `<p class="q">${r.gov.hidden ? "This player hides their governor gear in game." : "No governor gear on record."}</p>`;
+  const heroes = r.heroes.length
+    ? r.heroes.map(h => `<div class="hero"><b>${esc(h.name)}</b> <span class="q">Lv ${h.level??"-"}${h.stars?` · ${esc(h.stars)}`:""}${h.exclusive?` · ${esc(h.exclusive.name)} Lv ${h.exclusive.level}`:""}</span>
+        ${h.gear.length?`<ul>${h.gear.map(g => `<li><b>${esc(g.slot)}</b> ${esc(g.name)} <span class="q${g.red?" red":""}">${esc(g.quality??"")} +${g.level??0}${g.refine?` · mastery ${g.refine}`:""}</span></li>`).join("")}</ul>`:""}</div>`).join("")
+    : `<p class="q">No arena heroes on record.</p>`;
+  return `<tr class="detail"><td colspan="${COLS.length}"><div class="cols">
+    <section><h2>Governor gear</h2>${gov}</section>
+    <section><h2>Arena heroes and gear</h2>${heroes}</section></div></td></tr>`;
+}
+const open = new Set();
+let gearState = "idle";
+// Second step: VIP, coordinates, governor gear and heroes, 50 members per request.
+async function loadGear(){
+  gearState = "loading"; render();
+  const ids = rows.map(r => r.uid).filter(id => /^\d+$/.test(id));
+  const chunks = []; for (let i=0;i<ids.length;i+=50) chunks.push(ids.slice(i,i+50));
+  const byId = new Map(rows.map(r => [r.uid, r]));
+  await Promise.all(chunks.map(async c => {
+    try{
+      const res = await fetch("/api/gear?ids=" + c.join(","));
+      if(!res.ok) return;
+      for (const p of (await res.json()).players || []) {
+        const r = byId.get(String(p.governor_id)); if(!r) continue;
+        r.vip = p.vip ?? null;
+        r.coords = p.x!=null && p.y!=null ? `${p.x}, ${p.y}` : null;
+        r.gov = p.gov_gear; r.heroes = p.heroes || [];
+        r.gear = p.gov_gear.items.length ? p.gov_gear.items.reduce((t,i)=>t+(i.score||0),0) : null;
+      }
+    }catch(e){ /* table stays usable without gear */ }
+    render();
+  }));
+  gearState = "done"; render();
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -126,6 +179,7 @@ async function load(){
     const a = data.alliance;
     if (a) $("sub").textContent = `Kingshot · Kingdom 2206 · ${fmt(a.power)} power · kingdom rank #${a.power_rank}`
       + (data.cached_at ? ` · updated ${ago(parseActive(data.cached_at))}` : "");
+    loadGear();
     render();
   }catch(e){
     $("body").innerHTML = `<tr><td class="msg err">Couldn't load members (${esc(e.message)}). Try Refresh.</td></tr>`;
@@ -136,6 +190,14 @@ $("head").addEventListener("click", e => {
   const k = th.dataset.k;
   sort = sort.k===k ? {k, dir:-sort.dir} : {k, dir: k==="name"||k==="coords"?1:-1};
   render();
+});
+$("body").addEventListener("click", e => {
+  const b = e.target.closest("button.name"); if(!b) return;
+  const id = b.dataset.uid;
+  open.has(id) ? open.delete(id) : open.add(id);
+  render();
+  const again = document.querySelector(`button.name[data-uid="${CSS.escape(id)}"]`);
+  if (again) again.focus();
 });
 $("q").addEventListener("input", render);
 $("refresh").addEventListener("click", load);
